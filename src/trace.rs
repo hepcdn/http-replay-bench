@@ -29,7 +29,7 @@ impl Range {
         match self {
             Range::Single(br) => {
                 let (start, end) = br.start_end(content_length);
-                format!("bytes={}-{}", start, end)
+                format!("bytes={start}-{end}")
             }
             Range::Multi(brs) => {
                 let ranges: Vec<String> = brs
@@ -37,7 +37,7 @@ impl Range {
                     .filter(|r| r.offset < content_length)
                     .map(|br| {
                         let (start, end) = br.start_end(content_length);
-                        format!("{}-{}", start, end)
+                        format!("{start}-{end}")
                     })
                     .collect();
                 format!("bytes={}", ranges.join(","))
@@ -115,20 +115,19 @@ impl Trace {
                 actions.push(Action::Sleep(sleep_duration));
             }
 
-            let request = match entry.vector {
-                true => Action::Request(Range::Multi(
+            let request = if entry.vector {
+                Action::Request(Range::Multi(
                     entry
                         .chunks
                         .into_iter()
                         .map(|(offset, size)| ByteRange { offset, size })
                         .collect(),
-                )),
-                false => {
-                    let (offset, size) = entry.chunks.into_iter().next().ok_or_else(|| {
-                        anyhow::anyhow!("Expected at least one chunk for non-vector request")
-                    })?;
-                    Action::Request(Range::Single(ByteRange { offset, size }))
-                }
+                ))
+            } else {
+                let (offset, size) = entry.chunks.into_iter().next().ok_or_else(|| {
+                    anyhow::anyhow!("Expected at least one chunk for non-vector request")
+                })?;
+                Action::Request(Range::Single(ByteRange { offset, size }))
             };
             actions.push(request);
         }

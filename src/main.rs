@@ -66,7 +66,7 @@ impl Worker {
             .enable_all()
             .build()?;
         rt.block_on(async {
-            let client = client_spec(args.transport.clone()).build()?;
+            let client = client_spec(&args.transport).build()?;
             let mut all_stats = Vec::new();
             let mut stream = stream::iter(iter::from_fn(|| self.pool.next_path()))
                 .map(|url| self.driver.run(&client, url))
@@ -90,7 +90,7 @@ struct RunStats {
 }
 
 fn run(args: &Args) -> anyhow::Result<()> {
-    let urls = URLPool::load(args.url_config.clone())?;
+    let urls = URLPool::load(&args.url_config)?;
     let driver: ClientDriver = ClientDriver::new(args.driver.clone())?;
 
     // Create before starting, so we can fail fast if the file can't be created.
@@ -131,7 +131,7 @@ fn run(args: &Args) -> anyhow::Result<()> {
 fn main() {
     let args = Args::parse();
     if let Err(e) = run(&args) {
-        eprintln!("Error: {}", e);
+        eprintln!("Error: {e}");
         std::process::exit(1);
     }
 }

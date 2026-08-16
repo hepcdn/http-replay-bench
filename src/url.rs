@@ -40,7 +40,7 @@ pub struct URLPool {
 }
 
 impl URLPool {
-    pub fn load(config: URLPoolConfig) -> anyhow::Result<Self> {
+    pub fn load(config: &URLPoolConfig) -> anyhow::Result<Self> {
         let file = File::open(&config.path_file)?;
         let reader = BufReader::new(file);
         let paths = reader

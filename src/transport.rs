@@ -28,7 +28,7 @@ pub enum HttpVersion {
 /// Set up the reqwest client configuration based on the provided arguments.
 ///
 /// We delay building the client until we are inside the tokio runtime
-pub fn client_spec(config: TransportConfig) -> reqwest::ClientBuilder {
+pub fn client_spec(config: &TransportConfig) -> reqwest::ClientBuilder {
     let builder = reqwest::ClientBuilder::new()
         .pool_idle_timeout(Some(Duration::from_secs(5)))
         .timeout(Duration::from_secs(5))

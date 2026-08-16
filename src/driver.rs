@@ -61,7 +61,7 @@ async fn get_content_length(client: &reqwest::Client, url: &str) -> Option<NonZe
         .and_then(|s| s.parse::<NonZeroUsize>().ok())
 }
 
-/// Helper struct to hold the sink_response stats
+/// Helper struct to hold the `sink_response` stats
 #[derive(Clone, Debug)]
 struct SinkResponseResult {
     total_bytes: usize,
@@ -85,12 +85,9 @@ async fn sink_response(
     let mut result = SinkResponseResult::new();
 
     // Errors in sending or with redirect loop/exhaustion
-    let mut response = match response {
-        Ok(resp) => resp,
-        Err(_) => {
-            result.errors += 1;
-            return result;
-        }
+    let Ok(mut response) = response else {
+        result.errors += 1;
+        return result;
     };
 
     // Always expect a 206 Partial Content response for range requests; otherwise, count as an error
@@ -107,7 +104,7 @@ async fn sink_response(
         // Range: bytes=0-499
         // Content-Range: bytes 0-499/25000
         let expected = expected_range.replace("bytes=", "bytes ");
-        let observed = range.split("/").next().unwrap_or("");
+        let observed = range.split('/').next().unwrap_or("");
         if expected != observed {
             result.errors += 1;
             return result;
@@ -127,12 +124,11 @@ async fn sink_response(
     }
 
     while let Some(chunk) = response.chunk().await.transpose() {
-        match chunk {
-            Ok(bytes) => result.total_bytes += bytes.len(),
-            Err(_) => {
-                result.errors += 1;
-                break;
-            }
+        if let Ok(bytes) = chunk {
+            result.total_bytes += bytes.len();
+        } else {
+            result.errors += 1;
+            break;
         }
     }
 
@@ -168,12 +164,9 @@ impl ReplayDriver {
     async fn run(&self, client: &reqwest::Client, url: &str) -> ClientStats {
         let mut stats = ClientStats::new();
 
-        let content_length = match get_content_length(client, url).await {
-            Some(len) => len,
-            None => {
-                stats.errors += 1;
-                return stats;
-            }
+        let Some(content_length) = get_content_length(client, url).await else {
+            stats.errors += 1;
+            return stats;
         };
 
         for action in self.trace.actions() {
@@ -234,26 +227,24 @@ impl PatternDriver {
     async fn run(&self, client: &reqwest::Client, url: &str) -> ClientStats {
         let mut stats = ClientStats::new();
 
-        let content_length = match get_content_length(client, url).await {
-            Some(len) => len,
-            None => {
-                stats.errors += 1;
-                return stats;
-            }
+        let Some(content_length) = get_content_length(client, url).await else {
+            stats.errors += 1;
+            return stats;
         };
 
         let request_length = self.config.request_size.get().min(content_length.get());
         let max_start = content_length.get().saturating_sub(request_length);
-        let seed = match self.config.deterministic {
-            true => Sha256::digest(url.as_bytes()).into(),
-            false => rand::random(),
+        let seed = if self.config.deterministic {
+            Sha256::digest(url.as_bytes()).into()
+        } else {
+            rand::random()
         };
         let mut rng = ChaCha8Rng::from_seed(seed);
 
         for _ in 0..self.config.num_requests {
             let start = rng.random_range(0..=max_start);
             let end = start + request_length - 1;
-            let range_header = format!("bytes={}-{}", start, end);
+            let range_header = format!("bytes={start}-{end}");
             let request_start = Instant::now();
             let response = client
                 .get(url)
