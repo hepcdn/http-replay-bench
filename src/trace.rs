@@ -108,6 +108,7 @@ impl Trace {
 
         let mut actions = Vec::with_capacity(raw.len() * 2 - 1);
         let mut prev_end = None;
+        // TODO: enforce that the trace is sorted by start_ms and that there are no overlapping requests
         for entry in raw {
             if let Some(end) = prev_end.replace(entry.end_ms) {
                 let sleep_duration = entry.start_ms.saturating_sub(end);

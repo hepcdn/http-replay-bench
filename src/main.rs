@@ -1,16 +1,24 @@
 use std::{
-    fs::File, io::{BufRead, BufReader}, iter, path::PathBuf, sync::{Arc, atomic}, thread, time::{Duration, Instant},
+    fs::File,
+    iter,
+    path::PathBuf,
+    thread,
+    time::{Duration, Instant},
 };
 
 use ::futures::{StreamExt, stream};
-use clap::{Parser, ValueEnum};
+use clap::Parser;
 use serde::Serialize;
-use serde_with::{serde_as, DurationSecondsWithFrac};
+use serde_with::{DurationSecondsWithFrac, serde_as};
 
 use crate::driver::{ClientDriver, DriverConfig};
+use crate::transport::{TransportConfig, client_spec};
+use crate::url::{URLPool, URLPoolConfig};
 
 mod driver;
 mod trace;
+mod transport;
+mod url;
 
 /// A load generator for benchmarking distributed storage via http protocol.
 ///
@@ -21,29 +29,17 @@ mod trace;
 /// thousands of concurrent clients, and it is designed to be run on a single
 /// machine with a large number of CPU cores and network bandwidth.
 #[derive(Clone, Parser, Debug, Serialize)]
-#[command(version, about, long_about = None)]
+#[command(version)]
 struct Args {
-    /// Endpoint URL prefix to send requests to.
-    #[arg(short, long)]
-    endpoint: String,
-
-    /// File containing a list of relative paths to request, one per line.
-    ///
-    /// Each path will be appended to the endpoint URL prefix.
-    #[arg(short, long)]
-    path_file: PathBuf,
-
-    /// Limit the number of paths to read from the path file.
-    #[arg(short, long)]
-    limit: Option<usize>,
+    #[command(flatten)]
+    url_config: URLPoolConfig,
 
     /// Output file to write the results to.
     #[arg(short, long, default_value = "results.json")]
     output_file: PathBuf,
 
-    /// HTTP version to use for requests.
-    #[arg(value_enum, default_value_t = HttpVersion::Http1p1)]
-    http_version: HttpVersion,
+    #[command(flatten)]
+    transport: TransportConfig,
 
     /// Number of worker threads to spawn for generating load.
     #[arg(short, long, default_value_t = 16)]
@@ -55,47 +51,6 @@ struct Args {
 
     #[command(subcommand)]
     driver: DriverConfig,
-}
-
-#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, ValueEnum, Serialize)]
-enum HttpVersion {
-    /// Use HTTP/1.1 for requests.
-    Http1p1,
-    /// Use HTTP/2 for requests.
-    Http2,
-}
-
-#[derive(Clone, Debug)]
-struct URLPool {
-    paths: Arc<Vec<String>>,
-    index: Arc<atomic::AtomicUsize>,
-}
-
-impl URLPool {
-    fn load(args: &Args) -> anyhow::Result<Self> {
-        let file = File::open(&args.path_file)?;
-        let reader = BufReader::new(file);
-        let paths: Vec<String> = reader
-            .lines()
-            .map_while(Result::ok)
-            .filter(|line| !line.trim().is_empty())
-            .take(args.limit.unwrap_or(usize::MAX))
-            .map(|line| args.endpoint.to_owned() + &line)
-            .collect();
-        Ok(Self {
-            paths: Arc::new(paths),
-            index: Arc::new(atomic::AtomicUsize::new(0)),
-        })
-    }
-
-    fn next_path(&self) -> Option<String> {
-        let idx = self.index.fetch_add(1, atomic::Ordering::Relaxed);
-        if idx < self.paths.len() {
-            Some(self.paths[idx].clone())
-        } else {
-            None
-        }
-    }
 }
 
 /// Split clients into multiple worker threads, each running a tokio runtime to generate load concurrently.
@@ -111,7 +66,7 @@ impl Worker {
             .enable_all()
             .build()?;
         rt.block_on(async {
-            let client = client_spec(args).build()?;
+            let client = client_spec(args.transport.clone()).build()?;
             let mut all_stats = Vec::new();
             let mut stream = stream::iter(iter::from_fn(|| self.pool.next_path()))
                 .map(|url| self.driver.run(&client, url))
@@ -124,31 +79,18 @@ impl Worker {
     }
 }
 
-/// Set up the reqwest client configuration based on the provided arguments.
-///
-/// We delay building the client until we are inside the tokio runtime
-fn client_spec(args: &Args) -> reqwest::ClientBuilder {
-    let builder = reqwest::ClientBuilder::new()
-        .pool_idle_timeout(Some(Duration::from_secs(5)))
-        .timeout(Duration::from_secs(5))
-        .tcp_nodelay(true);
-    match args.http_version {
-        HttpVersion::Http1p1 => builder.http1_only(),
-        HttpVersion::Http2 => builder.http2_prior_knowledge(),
-    }
-}
-
 #[serde_as]
 #[derive(Clone, Debug, Serialize)]
 struct RunStats {
     args: Args,
+    /// Total wall time taken for the run.
     #[serde_as(as = "DurationSecondsWithFrac<f64>")]
-    run_duration: Duration,
+    wall_time: Duration,
     client_stats: Vec<driver::ClientStats>,
 }
 
 fn run(args: &Args) -> anyhow::Result<()> {
-    let urls = URLPool::load(args)?;
+    let urls = URLPool::load(args.url_config.clone())?;
     let driver: ClientDriver = ClientDriver::new(args.driver.clone())?;
 
     // Create before starting, so we can fail fast if the file can't be created.
@@ -177,7 +119,7 @@ fn run(args: &Args) -> anyhow::Result<()> {
 
     let run_stats = RunStats {
         args: args.clone(),
-        run_duration,
+        wall_time: run_duration,
         client_stats: stats,
     };
 

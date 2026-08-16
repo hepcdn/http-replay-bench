@@ -8,7 +8,7 @@ use std::{
 use clap::{Args, Subcommand};
 use rand::{RngExt, SeedableRng, rngs::ChaCha8Rng};
 use serde::Serialize;
-use serde_with::{serde_as, DurationSecondsWithFrac, TimestampSecondsWithFrac};
+use serde_with::{DurationSecondsWithFrac, TimestampSecondsWithFrac, serde_as};
 use sha2::{Digest, Sha256};
 
 use crate::trace;
@@ -101,8 +101,7 @@ async fn sink_response(
     if let Some(range) = response
         .headers()
         .get(reqwest::header::CONTENT_RANGE)
-        .map(|v| v.to_str().ok())
-        .flatten()
+        .and_then(|v| v.to_str().ok())
     {
         // Single range (request, response) example:
         // Range: bytes=0-499
@@ -117,16 +116,14 @@ async fn sink_response(
     if let Some(content_type) = response
         .headers()
         .get(reqwest::header::CONTENT_TYPE)
-        .map(|v| v.to_str().ok())
-        .flatten()
+        .and_then(|v| v.to_str().ok())
+        && content_type.starts_with("multipart/byteranges; boundary")
     {
-        if content_type.starts_with("multipart/byteranges; boundary") {
-            // Multipart responses
-            // TODO: Validate the multipart response matches the expected ranges
-            // The streamed body below will include the multipart headers and
-            // boundaries, so we can't just count bytes. For now, we'll just
-            // count the total bytes read and not validate the content.
-        }
+        // Multipart responses
+        // TODO: Validate the multipart response matches the expected ranges
+        // The streamed body below will include the multipart headers and
+        // boundaries, so we can't just count bytes. For now, we'll just
+        // count the total bytes read and not validate the content.
     }
 
     while let Some(chunk) = response.chunk().await.transpose() {
