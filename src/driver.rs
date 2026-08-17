@@ -12,10 +12,7 @@ use serde_with::{DurationSecondsWithFrac, TimestampSecondsWithFrac, serde_as};
 use sha2::{Digest, Sha256};
 use tracing::{Level, event};
 
-use crate::{
-    trace,
-    transport::{head_url, range_request},
-};
+use crate::{trace, transport::Transport};
 
 #[serde_as]
 #[derive(Clone, Debug, Serialize)]
@@ -78,10 +75,10 @@ impl ReplayDriver {
         })
     }
 
-    async fn run(&self, client: &reqwest::Client, url: &str) -> ClientStats {
+    async fn run(&self, transport: &Transport, url: &str) -> ClientStats {
         let mut stats = ClientStats::new();
 
-        let content_length = match head_url(client, url).await {
+        let content_length = match transport.head_url(url).await {
             Ok(length) => length,
             Err(e) => {
                 stats.error = Some(format!("Failed to get content length: {e}"));
@@ -94,7 +91,7 @@ impl ReplayDriver {
                 trace::Action::Request(range) => {
                     let range_header = range.to_header_value(content_length.into());
                     let request_start = Instant::now();
-                    let request_bytes = range_request(client, url, range_header).await;
+                    let request_bytes = transport.range_request(url, range_header).await;
                     match request_bytes {
                         Ok(bytes) => {
                             stats.total_bytes += bytes;
@@ -146,10 +143,10 @@ impl PatternDriver {
         Self { config }
     }
 
-    async fn run(&self, client: &reqwest::Client, url: &str) -> ClientStats {
+    async fn run(&self, transport: &Transport, url: &str) -> ClientStats {
         let mut stats = ClientStats::new();
 
-        let content_length = match head_url(client, url).await {
+        let content_length = match transport.head_url(url).await {
             Ok(length) => length,
             Err(e) => {
                 stats.error = Some(format!("Failed to get content length: {e}"));
@@ -171,7 +168,7 @@ impl PatternDriver {
             let end = start + request_length - 1;
             let range_header = format!("bytes={start}-{end}");
             let request_start = Instant::now();
-            let request_bytes = range_request(client, url, range_header).await;
+            let request_bytes = transport.range_request(url, range_header).await;
             match request_bytes {
                 Ok(bytes) => {
                     stats.total_bytes += bytes;
@@ -216,11 +213,11 @@ impl ClientDriver {
         }
     }
 
-    #[tracing::instrument(level = Level::DEBUG, skip(self, client))]
-    pub async fn run(&self, client: &reqwest::Client, url: String) -> ClientStats {
+    #[tracing::instrument(level = Level::DEBUG, skip(self, transport))]
+    pub async fn run(&self, transport: &Transport, url: String) -> ClientStats {
         let stats = match self {
-            ClientDriver::Replay(driver) => driver.run(client, &url).await,
-            ClientDriver::Pattern(driver) => driver.run(client, &url).await,
+            ClientDriver::Replay(driver) => driver.run(transport, &url).await,
+            ClientDriver::Pattern(driver) => driver.run(transport, &url).await,
         };
         event!(Level::DEBUG, "Client finished: {stats:?}");
         stats

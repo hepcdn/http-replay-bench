@@ -14,13 +14,14 @@ use tracing::{Level, event};
 use tracing_subscriber::fmt::format::FmtSpan;
 
 use crate::driver::{ClientDriver, DriverConfig};
-use crate::transport::{TransportConfig, client_spec};
+use crate::transport::TransportConfig;
 use crate::url::{URLPool, URLPoolConfig};
 
 mod driver;
 mod trace;
 mod transport;
 mod url;
+mod wlcg_token_discovery;
 
 /// A load generator for benchmarking distributed storage via http protocol.
 ///
@@ -79,10 +80,10 @@ impl Worker {
             .enable_all()
             .build()?;
         rt.block_on(async {
-            let client = client_spec(&args.transport)?.build()?;
+            let transport = transport::Transport::try_build(&args.transport)?;
             let mut all_stats = Vec::new();
             let mut stream = stream::iter(iter::from_fn(|| self.pool.next_path()))
-                .map(|url| self.driver.run(&client, url))
+                .map(|url| self.driver.run(&transport, url))
                 .buffer_unordered(args.worker_concurrency);
             while let Some(result) = stream.next().await {
                 all_stats.push(result);

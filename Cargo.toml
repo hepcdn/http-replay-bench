@@ -5,12 +5,17 @@ edition = "2024"
 
 [dependencies]
 anyhow = "1.0.104"
+arc-swap = "1.9.2"
+async-trait = "0.1.92"
 clap = { version = "4.6.6", features = ["derive"] }
 flate2 = "1.1.9"
 futures = "0.3.34"
+http = "1.5.0"
 nix = { version = "0.31.3", features = ["user"] }
 rand = { version = "0.10.2", features = ["chacha"] }
 reqwest = "0.13.4"
+reqwest-middleware = "0.5.2"
+reqwest-retry = "0.9.1"
 serde = { version = "1.0.229", features = ["derive"] }
 serde_json = "1.0.151"
 serde_with = "3.22.0"
