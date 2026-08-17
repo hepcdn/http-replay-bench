@@ -22,13 +22,20 @@ pub struct TransportConfig {
     #[arg(long, default_value_t = 5)]
     timeout: u64,
 
-    /// Follow redirects when making requests.
-    #[arg(long, default_value_t = true)]
-    follow_redirects: bool,
+    /// Don't follow redirects when making requests.
+    #[arg(long)]
+    no_follow_redirects: bool,
 
     /// Maximum retries (uses exponential backoff with jitter)
     #[arg(long, default_value_t = 10)]
     max_retries: u32,
+
+    /// Require WLCG bearer tokens to be present
+    ///
+    /// If true, missing tokens will fail the program fast (rather than try to
+    /// read unauthenticated)
+    #[arg(long)]
+    require_wlcg_token: bool,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, ValueEnum, Serialize)]
@@ -84,24 +91,29 @@ impl Transport {
             .pool_idle_timeout(Some(Duration::from_secs(config.timeout)))
             .timeout(Duration::from_secs(config.timeout))
             .tcp_nodelay(true);
-        let builder = if config.follow_redirects {
-            builder.redirect(reqwest::redirect::Policy::limited(10))
-        } else {
+        let builder = if config.no_follow_redirects {
             builder.redirect(reqwest::redirect::Policy::none())
+        } else {
+            builder.redirect(reqwest::redirect::Policy::limited(10))
         };
         let builder = match config.http_version {
             HttpVersion::Http1p1 => builder.http1_only(),
             HttpVersion::Http2 => builder.http2_prior_knowledge(),
         };
 
+        // Now attach middleware
+        let builder = reqwest_middleware::ClientBuilder::new(builder.build()?);
+
         let retry_policy = ExponentialBackoff::builder().build_with_max_retries(config.max_retries);
         let retries = RetryTransientMiddleware::new_with_policy(retry_policy);
-        let authorization = WLCGTokenAuthMiddleware::try_new()?;
+        let builder = builder.with(retries);
 
-        // Now attach middleware
-        let builder = reqwest_middleware::ClientBuilder::new(builder.build()?)
-            .with(retries)
-            .with(authorization);
+        let authorization = WLCGTokenAuthMiddleware::try_new();
+        let builder = match authorization {
+            Ok(authorization) => builder.with(authorization),
+            Err(auth_err) if config.require_wlcg_token => return Err(auth_err.into()),
+            Err(_) => builder,
+        };
 
         Ok(Transport {
             internal_client: builder.build(),

@@ -21,9 +21,11 @@ pub enum TokenSource {
 impl std::fmt::Display for TokenSource {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
-            TokenSource::EnvBearerTokenFile => write!(f, "path specified in BEARER_TOKEN_FILE"),
-            TokenSource::EnvXdgRuntimeDir => write!(f, "path specified in XDG_RUNTIME_DIR"),
-            TokenSource::TmpDir => write!(f, "/tmp/bt_u<uid>"),
+            TokenSource::EnvBearerTokenFile => write!(f, "path specified in $BEARER_TOKEN_FILE"),
+            TokenSource::EnvXdgRuntimeDir => {
+                write!(f, "path specified in $XDG_RUNTIME_DIR/bt_u$ID")
+            }
+            TokenSource::TmpDir => write!(f, "/tmp/bt_u$ID"),
         }
     }
 }
@@ -37,10 +39,14 @@ pub enum TokenDiscoveryError {
     FileReadError(TokenSource, std::io::Error),
 }
 
-/// Read to string from a file, returning None if the file does not exist.
+/// Read to string from a file, returning None if the file does not exist
+/// or the contents are empty
 fn read_to_string(token_path: &str) -> Result<Option<String>, std::io::Error> {
     match std::fs::read_to_string(token_path) {
-        Ok(token) => Ok(Some(token.trim().to_string())),
+        Ok(token) => {
+            let token = token.trim();
+            Ok((!token.is_empty()).then(|| token.to_string()))
+        }
         Err(e) if e.kind() == ErrorKind::NotFound => Ok(None),
         Err(e) => Err(e),
     }
@@ -49,37 +55,37 @@ fn read_to_string(token_path: &str) -> Result<Option<String>, std::io::Error> {
 /// Get a WLCG token from the environment
 ///
 /// Procedure:
-/// - If BEARER_TOKEN is set, use it.
-/// - If BEARER_TOKEN_FILE is set, read the token from the file.
-/// - If XDG_RUNTIME_DIR is set then read the token from $XDG_RUNTIME_DIR/bt_u$ID
-/// - If /tmp/bt_u$ID exists, read the token from it.
+/// - If `BEARER_TOKEN` env is set, use it.
+/// - If `BEARER_TOKEN_FILE` env is set, read the token from the file.
+/// - If `XDG_RUNTIME_DIR` env is set then read the token from `$XDG_RUNTIME_DIR/bt_u$ID`.
+/// - If `/tmp/bt_u$ID` exists, read the token from it.
+///
+/// Full specification at <https://github.com/WLCG-AuthZ-WG/bearer-token-discovery/blob/master/specification.md>
 ///
 /// TODO: cache with Lazy ArcSwap and background thread to refresh based on expiration time.
 pub fn get_token() -> Result<String, TokenDiscoveryError> {
     if let Ok(token) = env::var("BEARER_TOKEN") {
-        return Ok(token);
-    }
-    if let Ok(token_path) = env::var("BEARER_TOKEN_FILE") {
-        if let Some(token) = read_to_string(&token_path)
-            .map_err(|e| TokenDiscoveryError::FileReadError(TokenSource::EnvBearerTokenFile, e))?
-        {
-            return Ok(token);
+        let token = token.trim();
+        if !token.is_empty() {
+            return Ok(token.to_string());
         }
     }
     let uid = nix::unistd::Uid::current();
-    if let Ok(xdg_runtime_dir) = env::var("XDG_RUNTIME_DIR") {
-        let token_path = format!("{}/bt_u{}", xdg_runtime_dir, uid);
-        if let Some(token) = read_to_string(&token_path)
-            .map_err(|e| TokenDiscoveryError::FileReadError(TokenSource::EnvXdgRuntimeDir, e))?
+    let candidates = [
+        env::var("BEARER_TOKEN_FILE")
+            .ok()
+            .map(|path| (path, TokenSource::EnvBearerTokenFile)),
+        env::var("XDG_RUNTIME_DIR")
+            .ok()
+            .map(|dir| (format!("{dir}/bt_u{uid}"), TokenSource::EnvXdgRuntimeDir)),
+        Some((format!("/tmp/bt_u{uid}"), TokenSource::TmpDir)),
+    ];
+    for (path, source) in candidates.into_iter().flatten() {
+        if let Some(token) =
+            read_to_string(&path).map_err(|e| TokenDiscoveryError::FileReadError(source, e))?
         {
             return Ok(token);
         }
-    }
-    let token_path = format!("/tmp/bt_u{}", uid);
-    if let Some(token) = read_to_string(&token_path)
-        .map_err(|e| TokenDiscoveryError::FileReadError(TokenSource::TmpDir, e))?
-    {
-        return Ok(token);
     }
     Err(TokenDiscoveryError::NoTokenFound)
 }
