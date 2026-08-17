@@ -10,7 +10,7 @@ use rand::{RngExt, SeedableRng, rngs::ChaCha8Rng};
 use serde::Serialize;
 use serde_with::{DurationSecondsWithFrac, TimestampSecondsWithFrac, serde_as};
 use sha2::{Digest, Sha256};
-use tracing::{Level, span};
+use tracing::{Level, event};
 
 use crate::{
     trace,
@@ -216,11 +216,13 @@ impl ClientDriver {
         }
     }
 
+    #[tracing::instrument(level = Level::DEBUG, skip(self, client))]
     pub async fn run(&self, client: &reqwest::Client, url: String) -> ClientStats {
-        let _run_span = span!(Level::DEBUG, "client_driver", driver_type = ?self).entered();
-        match self {
+        let stats = match self {
             ClientDriver::Replay(driver) => driver.run(client, &url).await,
             ClientDriver::Pattern(driver) => driver.run(client, &url).await,
-        }
+        };
+        event!(Level::DEBUG, "Client finished: {stats:?}");
+        stats
     }
 }

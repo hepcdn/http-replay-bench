@@ -11,7 +11,7 @@ use clap::Parser;
 use serde::Serialize;
 use serde_with::{DurationSecondsWithFrac, serde_as};
 use tracing::{Level, event};
-use tracing_subscriber::fmt;
+use tracing_subscriber::fmt::format::FmtSpan;
 
 use crate::driver::{ClientDriver, DriverConfig};
 use crate::transport::{TransportConfig, client_spec};
@@ -146,9 +146,10 @@ fn run(args: &Args) -> anyhow::Result<()> {
 fn main() {
     let args = Args::parse();
 
-    fmt()
+    tracing_subscriber::fmt()
         .with_writer(std::io::stderr)
         .with_max_level(args.log_level)
+        .with_span_events(FmtSpan::NEW | FmtSpan::CLOSE)
         .init();
     if let Err(e) = run(&args) {
         event!(Level::ERROR, "Application error: {e}");
