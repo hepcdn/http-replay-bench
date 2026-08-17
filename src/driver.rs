@@ -93,6 +93,10 @@ impl ReplayDriver {
             match action {
                 trace::Action::Request(range) => {
                     let range_header = range.to_header_value(content_length.into());
+                    if range_header.is_empty() {
+                        event!(Level::DEBUG, "Skipping request for empty range");
+                        continue;
+                    }
                     let request_start = Instant::now();
                     let request_bytes = transport.range_request(url, range_header).await;
                     match request_bytes {

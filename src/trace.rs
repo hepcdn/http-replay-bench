@@ -25,22 +25,31 @@ impl Range {
     /// Convert the range into a string suitable for use in an HTTP Range header.
     ///
     /// The `content_length` parameter is used to trim ranges to the end of the content if they exceed it.
+    /// If no ranges are valid after trimming, an empty string is returned.
     pub fn to_header_value(&self, content_length: usize) -> String {
         match self {
             Range::Single(br) => {
                 let (start, end) = br.start_end(content_length);
+                if end < start {
+                    return String::new();
+                }
                 format!("bytes={start}-{end}")
             }
             Range::Multi(brs) => {
-                let ranges: Vec<String> = brs
+                let ranges = brs
                     .iter()
                     .filter(|r| r.offset < content_length)
                     .map(|br| {
                         let (start, end) = br.start_end(content_length);
                         format!("{start}-{end}")
                     })
-                    .collect();
-                format!("bytes={}", ranges.join(","))
+                    .collect::<Vec<_>>()
+                    .join(",");
+                if ranges.is_empty() {
+                    ranges
+                } else {
+                    format!("bytes={}", ranges)
+                }
             }
         }
     }
