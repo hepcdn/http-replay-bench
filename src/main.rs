@@ -10,6 +10,8 @@ use ::futures::{StreamExt, stream};
 use clap::Parser;
 use serde::Serialize;
 use serde_with::{DurationSecondsWithFrac, serde_as};
+use tracing::{Level, event};
+use tracing_subscriber::fmt;
 
 use crate::driver::{ClientDriver, DriverConfig};
 use crate::transport::{TransportConfig, client_spec};
@@ -49,6 +51,11 @@ struct Args {
     #[arg(short, long, default_value_t = 1000)]
     worker_concurrency: usize,
 
+    /// Log level for tracing output.
+    #[serde(skip)]
+    #[arg(long, default_value_t = Level::INFO)]
+    log_level: Level,
+
     #[command(subcommand)]
     driver: DriverConfig,
 }
@@ -62,6 +69,12 @@ struct Worker {
 
 impl Worker {
     fn run(&self, args: &Args) -> anyhow::Result<Vec<driver::ClientStats>> {
+        let _worker_span = tracing::span!(
+            Level::INFO,
+            "worker",
+            worker_concurrency = args.worker_concurrency
+        )
+        .entered();
         let rt = tokio::runtime::Builder::new_current_thread()
             .enable_all()
             .build()?;
@@ -97,6 +110,8 @@ fn run(args: &Args) -> anyhow::Result<()> {
     let output_file = File::create(&args.output_file)?;
 
     let run_start = Instant::now();
+    let run_span = tracing::span!(Level::INFO, "run", num_workers = args.num_workers);
+    let _run_enter = run_span.enter();
 
     let stats = thread::scope(move |s| -> anyhow::Result<_> {
         let threads = (0..args.num_workers)
@@ -130,8 +145,13 @@ fn run(args: &Args) -> anyhow::Result<()> {
 
 fn main() {
     let args = Args::parse();
+
+    fmt()
+        .with_writer(std::io::stderr)
+        .with_max_level(args.log_level)
+        .init();
     if let Err(e) = run(&args) {
-        eprintln!("Error: {e}");
+        event!(Level::ERROR, "Application error: {e}");
         std::process::exit(1);
     }
 }
