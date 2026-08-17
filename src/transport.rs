@@ -37,7 +37,7 @@ pub enum HttpVersion {
 ///
 /// TODO: move this to a separate crate for reuse across multiple projects.
 mod wlcg_token_discovery {
-    use std::env;
+    use std::{env, io::ErrorKind};
 
     use thiserror::Error;
 
@@ -48,6 +48,15 @@ mod wlcg_token_discovery {
         NoTokenFound,
         #[error("Failed to read token from file: {0}")]
         FileReadError(std::io::Error),
+    }
+
+    /// Read to string from a file, returning None if the file does not exist.
+    fn read_to_string(token_path: &str) -> Result<Option<String>, TokenDiscoveryError> {
+        match std::fs::read_to_string(token_path) {
+            Ok(token) => Ok(Some(token.trim().to_string())),
+            Err(e) if e.kind() == ErrorKind::NotFound => Ok(None),
+            Err(e) => Err(TokenDiscoveryError::FileReadError(e)),
+        }
     }
 
     /// Get a WLCG token from the environment
@@ -63,21 +72,23 @@ mod wlcg_token_discovery {
         if let Ok(token) = env::var("BEARER_TOKEN") {
             return Ok(token);
         }
-        if let Ok(token_file) = env::var("BEARER_TOKEN_FILE") {
-            return std::fs::read_to_string(token_file)
-                .map_err(|e| TokenDiscoveryError::FileReadError(e));
+        if let Ok(token_path) = env::var("BEARER_TOKEN_FILE") {
+            if let Some(token) = read_to_string(&token_path)? {
+                return Ok(token);
+            }
         }
         let uid = nix::unistd::Uid::current();
         if let Ok(xdg_runtime_dir) = env::var("XDG_RUNTIME_DIR") {
             let token_path = format!("{}/bt_u{}", xdg_runtime_dir, uid);
-            return std::fs::read_to_string(&token_path)
-                .map_err(|e| TokenDiscoveryError::FileReadError(e));
+            if let Some(token) = read_to_string(&token_path)? {
+                return Ok(token);
+            }
         }
         let token_path = format!("/tmp/bt_u{}", uid);
-        std::fs::read_to_string(&token_path).map_err(|e| match e.kind() {
-            std::io::ErrorKind::NotFound => TokenDiscoveryError::NoTokenFound,
-            _ => TokenDiscoveryError::FileReadError(e),
-        })
+        if let Some(token) = read_to_string(&token_path)? {
+            return Ok(token);
+        }
+        Err(TokenDiscoveryError::NoTokenFound)
     }
 }
 
