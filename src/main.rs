@@ -70,12 +70,7 @@ struct Worker {
 
 impl Worker {
     fn run(&self, args: &Args) -> anyhow::Result<Vec<driver::ClientStats>> {
-        let _worker_span = tracing::span!(
-            Level::INFO,
-            "worker",
-            worker_concurrency = args.worker_concurrency
-        )
-        .entered();
+        let _worker_span = tracing::span!(Level::INFO, "worker",).entered();
         let rt = tokio::runtime::Builder::new_current_thread()
             .enable_all()
             .build()?;
@@ -111,7 +106,7 @@ fn run(args: &Args) -> anyhow::Result<()> {
     let output_file = File::create(&args.output_file)?;
 
     let run_start = Instant::now();
-    let run_span = tracing::span!(Level::INFO, "run", num_workers = args.num_workers);
+    let run_span = tracing::span!(Level::INFO, "run");
     let _run_enter = run_span.enter();
 
     let stats = thread::scope(move |s| -> anyhow::Result<_> {

@@ -17,6 +17,7 @@ use crate::{trace, transport::Transport};
 #[serde_as]
 #[derive(Clone, Debug, Serialize)]
 pub struct ClientStats {
+    url: String,
     #[serde_as(as = "TimestampSecondsWithFrac<f64>")]
     start_time: SystemTime,
     #[serde_as(as = "TimestampSecondsWithFrac<f64>")]
@@ -36,8 +37,9 @@ pub struct ClientStats {
 }
 
 impl ClientStats {
-    fn new() -> Self {
+    fn new(url: &str) -> Self {
         Self {
+            url: url.to_owned(),
             start_time: SystemTime::now(),
             stop_time: SystemTime::now(),
             requests: 0,
@@ -76,7 +78,7 @@ impl ReplayDriver {
     }
 
     async fn run(&self, transport: &Transport, url: &str) -> ClientStats {
-        let mut stats = ClientStats::new();
+        let mut stats = ClientStats::new(url);
 
         let content_length = match transport.head_url(url).await {
             Ok(length) => length,
@@ -144,7 +146,7 @@ impl PatternDriver {
     }
 
     async fn run(&self, transport: &Transport, url: &str) -> ClientStats {
-        let mut stats = ClientStats::new();
+        let mut stats = ClientStats::new(url);
 
         let content_length = match transport.head_url(url).await {
             Ok(length) => length,
@@ -213,7 +215,7 @@ impl ClientDriver {
         }
     }
 
-    #[tracing::instrument(level = Level::DEBUG, skip(self, transport))]
+    #[tracing::instrument(name = "driver.run", level = Level::DEBUG, skip_all)]
     pub async fn run(&self, transport: &Transport, url: String) -> ClientStats {
         let stats = match self {
             ClientDriver::Replay(driver) => driver.run(transport, &url).await,
