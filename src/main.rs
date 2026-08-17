@@ -79,7 +79,7 @@ impl Worker {
             .enable_all()
             .build()?;
         rt.block_on(async {
-            let client = client_spec(&args.transport).build()?;
+            let client = client_spec(&args.transport)?.build()?;
             let mut all_stats = Vec::new();
             let mut stream = stream::iter(iter::from_fn(|| self.pool.next_path()))
                 .map(|url| self.driver.run(&client, url))

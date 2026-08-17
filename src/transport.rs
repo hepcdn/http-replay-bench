@@ -33,23 +33,82 @@ pub enum HttpVersion {
     Http2,
 }
 
+/// A module for discovering WLCG tokens from the environment.
+///
+/// TODO: move this to a separate crate for reuse across multiple projects.
+mod wlcg_token_discovery {
+    use std::env;
+
+    use thiserror::Error;
+
+    /// Token discovery error
+    #[derive(Debug, Error)]
+    pub enum TokenDiscoveryError {
+        #[error("No token found in environment or default locations")]
+        NoTokenFound,
+        #[error("Failed to read token from file: {0}")]
+        FileReadError(std::io::Error),
+    }
+
+    /// Get a WLCG token from the environment
+    ///
+    /// Procedure:
+    /// - If BEARER_TOKEN is set, use it.
+    /// - If BEARER_TOKEN_FILE is set, read the token from the file.
+    /// - If XDG_RUNTIME_DIR is set then read the token from $XDG_RUNTIME_DIR/bt_u$ID
+    /// - If /tmp/bt_u$ID exists, read the token from it.
+    ///
+    /// TODO: Lazy ArcSwap to refresh based on expiration time.
+    pub fn get_token() -> Result<String, TokenDiscoveryError> {
+        if let Ok(token) = env::var("BEARER_TOKEN") {
+            return Ok(token);
+        }
+        if let Ok(token_file) = env::var("BEARER_TOKEN_FILE") {
+            return std::fs::read_to_string(token_file)
+                .map_err(|e| TokenDiscoveryError::FileReadError(e));
+        }
+        let uid = nix::unistd::Uid::current();
+        if let Ok(xdg_runtime_dir) = env::var("XDG_RUNTIME_DIR") {
+            let token_path = format!("{}/bt_u{}", xdg_runtime_dir, uid);
+            return std::fs::read_to_string(&token_path)
+                .map_err(|e| TokenDiscoveryError::FileReadError(e));
+        }
+        let token_path = format!("/tmp/bt_u{}", uid);
+        std::fs::read_to_string(&token_path).map_err(|e| match e.kind() {
+            std::io::ErrorKind::NotFound => TokenDiscoveryError::NoTokenFound,
+            _ => TokenDiscoveryError::FileReadError(e),
+        })
+    }
+}
+
 /// Set up the reqwest client configuration based on the provided arguments.
 ///
 /// We delay building the client until we are inside the tokio runtime
-pub fn client_spec(config: &TransportConfig) -> reqwest::ClientBuilder {
+pub fn client_spec(config: &TransportConfig) -> anyhow::Result<reqwest::ClientBuilder> {
+    // TODO: rather than lock in the auth here, we should refresh for each
+    // request in case the token expires.
+    let mut headers = reqwest::header::HeaderMap::new();
+    let token = wlcg_token_discovery::get_token()?;
+    let mut auth_value =
+        reqwest::header::HeaderValue::from_str(format!("Bearer {token}").as_str())?;
+    auth_value.set_sensitive(true);
+    headers.insert(reqwest::header::AUTHORIZATION, auth_value);
+
     let builder = reqwest::ClientBuilder::new()
         .pool_idle_timeout(Some(Duration::from_secs(config.timeout)))
         .timeout(Duration::from_secs(config.timeout))
-        .tcp_nodelay(true);
+        .tcp_nodelay(true)
+        .default_headers(headers);
     let builder = if config.follow_redirects {
         builder.redirect(reqwest::redirect::Policy::limited(10))
     } else {
         builder.redirect(reqwest::redirect::Policy::none())
     };
-    match config.http_version {
+    let builder = match config.http_version {
         HttpVersion::Http1p1 => builder.http1_only(),
         HttpVersion::Http2 => builder.http2_prior_knowledge(),
-    }
+    };
+    Ok(builder)
 }
 
 /// A transport error
