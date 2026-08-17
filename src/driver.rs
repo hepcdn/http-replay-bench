@@ -87,6 +87,7 @@ impl ReplayDriver {
                 return stats;
             }
         };
+        event!(Level::DEBUG, "Content length for {url}: {content_length}");
 
         for action in self.trace.actions() {
             match action {

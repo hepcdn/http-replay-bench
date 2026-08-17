@@ -13,8 +13,7 @@ use serde::Serialize;
 use serde_with::{DurationSecondsWithFrac, serde_as};
 use tracing::{Level, event};
 use tracing_subscriber::{
-    Layer, filter::LevelFilter, fmt::format::FmtSpan, layer::SubscriberExt,
-    util::SubscriberInitExt,
+    Layer, filter::LevelFilter, fmt::format::FmtSpan, layer::SubscriberExt, util::SubscriberInitExt,
 };
 
 use crate::driver::{ClientDriver, DriverConfig};
@@ -51,12 +50,18 @@ struct Args {
     transport: TransportConfig,
 
     /// Number of worker threads to spawn for generating load.
-    #[arg(short, long, default_value_t = 16)]
+    #[arg(short, long, default_value_t = 4)]
     num_workers: usize,
 
     /// Number of concurrent requests to make per worker thread.
-    #[arg(short, long, default_value_t = 1000)]
+    #[arg(short, long, default_value_t = 100)]
     worker_concurrency: usize,
+
+    /// Ramp-up window for gradually starting clients, in seconds.
+    ///
+    /// This prevents all clients from starting at once, which can overwhelm the system under test.
+    #[arg(long, default_value_t = 10)]
+    ramp_window: u64,
 
     /// Log level for tracing output.
     #[serde(skip)]
@@ -75,6 +80,7 @@ struct Args {
 /// Split clients into multiple worker threads, each running a tokio runtime to generate load concurrently.
 #[derive(Debug)]
 struct Worker {
+    index: usize,
     pool: URLPool,
     driver: ClientDriver,
 }
@@ -82,14 +88,29 @@ struct Worker {
 impl Worker {
     fn run(&self, args: &Args) -> anyhow::Result<Vec<driver::ClientStats>> {
         let _worker_span = tracing::span!(Level::INFO, "worker",).entered();
+        let launch_delay = args.ramp_window as f64 / args.worker_concurrency.max(1) as f64;
+        let thread_offset = launch_delay * (self.index as f64 / args.num_workers.max(1) as f64);
+        let launch_start =
+            tokio::time::Instant::now() + tokio::time::Duration::from_secs_f64(thread_offset);
         let rt = tokio::runtime::Builder::new_current_thread()
             .enable_all()
             .build()?;
         rt.block_on(async {
             let transport = transport::Transport::try_build(&args.transport)?;
+            // Shared borrow (that can be moved)
+            let transport = &transport;
             let mut all_stats = Vec::new();
-            let mut stream = stream::iter(iter::from_fn(|| self.pool.next_path()))
-                .map(|url| self.driver.run(&transport, url))
+            let mut stream = stream::iter(iter::from_fn(|| self.pool.next_path()).enumerate())
+                .map(move |(i, url)| {
+                    let launch_at = launch_start
+                        + tokio::time::Duration::from_secs_f64(
+                            launch_delay * i.min(args.worker_concurrency) as f64,
+                        );
+                    async move {
+                        tokio::time::sleep_until(launch_at).await;
+                        self.driver.run(transport, url).await
+                    }
+                })
                 .buffer_unordered(args.worker_concurrency);
             while let Some(result) = stream.next().await {
                 all_stats.push(result);
@@ -122,7 +143,8 @@ fn run(args: &Args) -> anyhow::Result<()> {
 
     let stats = thread::scope(move |s| -> anyhow::Result<_> {
         let threads = (0..args.num_workers)
-            .map(|_| Worker {
+            .map(|index| Worker {
+                index,
                 pool: urls.clone(),
                 driver: driver.clone(),
             })

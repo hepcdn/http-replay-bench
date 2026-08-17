@@ -11,6 +11,7 @@ use crate::wlcg_token_discovery::WLCGTokenAuthMiddleware;
 use clap::{Args, ValueEnum};
 use reqwest_retry::{RetryTransientMiddleware, policies::ExponentialBackoff};
 use serde::Serialize;
+use tracing::{Level, event};
 
 #[derive(Clone, Debug, Args, Serialize)]
 pub struct TransportConfig {
@@ -122,6 +123,7 @@ impl Transport {
 
     /// Get the content length of the resource at the given URL by sending a HEAD request.
     pub async fn head_url(&self, url: &str) -> Result<NonZeroUsize, TransportError> {
+        event!(Level::DEBUG, "Sending HEAD request to {url}");
         let head_response = self
             .internal_client
             .head(url)
@@ -150,6 +152,7 @@ impl Transport {
         url: &str,
         range_header: String,
     ) -> Result<usize, TransportError> {
+        event!(Level::DEBUG, "Sending range request to {url} with header: {range_header}");
         let mut response = self
             .internal_client
             .get(url)
