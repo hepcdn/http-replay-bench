@@ -11,6 +11,7 @@ clap = { version = "4.6.6", features = ["derive"] }
 flate2 = "1.1.9"
 futures = "0.3.34"
 http = "1.5.0"
+indicatif = "0.18.6"
 nix = { version = "0.31.3", features = ["user"] }
 rand = { version = "0.10.2", features = ["chacha"] }
 reqwest = "0.13.4"

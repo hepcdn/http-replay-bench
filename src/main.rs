@@ -1,5 +1,6 @@
 use std::{
     fs::File,
+    io::IsTerminal,
     iter,
     path::PathBuf,
     thread,
@@ -11,13 +12,18 @@ use clap::Parser;
 use serde::Serialize;
 use serde_with::{DurationSecondsWithFrac, serde_as};
 use tracing::{Level, event};
-use tracing_subscriber::fmt::format::FmtSpan;
+use tracing_subscriber::{
+    Layer, filter::LevelFilter, fmt::format::FmtSpan, layer::SubscriberExt,
+    util::SubscriberInitExt,
+};
 
 use crate::driver::{ClientDriver, DriverConfig};
+use crate::hud::Hud;
 use crate::transport::TransportConfig;
 use crate::url::{URLPool, URLPoolConfig};
 
 mod driver;
+mod hud;
 mod trace;
 mod transport;
 mod url;
@@ -56,6 +62,11 @@ struct Args {
     #[serde(skip)]
     #[arg(long, default_value_t = Level::INFO)]
     log_level: Level,
+
+    /// Show a live heads-up display of in-flight clients on stderr.
+    #[serde(skip)]
+    #[arg(long)]
+    hud: bool,
 
     #[command(subcommand)]
     driver: DriverConfig,
@@ -142,12 +153,23 @@ fn run(args: &Args) -> anyhow::Result<()> {
 fn main() {
     let args = Args::parse();
 
-    tracing_subscriber::fmt()
-        .with_writer(std::io::stderr)
-        .with_max_level(args.log_level)
+    let hud = Hud::new(args.hud);
+
+    let fmt_layer = tracing_subscriber::fmt::layer()
+        .with_writer(hud.writer())
+        .with_ansi(std::io::stderr().is_terminal())
         .with_span_events(FmtSpan::NEW | FmtSpan::CLOSE)
+        .with_filter(LevelFilter::from_level(args.log_level));
+
+    tracing_subscriber::registry()
+        .with(fmt_layer)
+        .with(hud.layer())
         .init();
-    if let Err(e) = run(&args) {
+
+    let result = run(&args);
+    hud.finish();
+
+    if let Err(e) = result {
         event!(Level::ERROR, "Application error: {e}");
         std::process::exit(1);
     }
