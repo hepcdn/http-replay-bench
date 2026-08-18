@@ -14,7 +14,7 @@ use tracing::{Level, event};
 
 use crate::{
     trace,
-    transport::{HeadResult, Transport},
+    transport::{HeadResult, RangeResult, Transport},
 };
 
 #[serde_as]
@@ -90,10 +90,7 @@ impl ReplayDriver {
     async fn run(&self, transport: &Transport, url: &str) -> ClientStats {
         let mut stats = ClientStats::new(url);
 
-        let HeadResult {
-            content_length,
-            final_url,
-        } = match transport.head_url(url).await {
+        let HeadResult { content_length } = match transport.head_url(url).await {
             Ok(length) => length,
             Err(e) => {
                 stats.error = Some(format!("Failed to get content length: {e}"));
@@ -101,12 +98,8 @@ impl ReplayDriver {
             }
         };
         event!(Level::DEBUG, "Content length for {url}: {content_length}");
-        let url = if self.config.sticky_redirect {
-            event!(Level::DEBUG, "Using URL for range requests: {final_url}");
-            final_url.as_str()
-        } else {
-            url
-        };
+
+        let mut url = url.to_owned();
 
         for action in self.trace.actions() {
             match action {
@@ -117,12 +110,20 @@ impl ReplayDriver {
                         continue;
                     }
                     let request_start = Instant::now();
-                    let request_bytes = transport.range_request(url, range_header).await;
+                    let request_bytes = transport.range_request(&url, range_header).await;
                     match request_bytes {
-                        Ok(bytes) => {
-                            stats.total_bytes += bytes;
+                        Ok(RangeResult {
+                            total_bytes,
+                            final_url,
+                        }) => {
+                            stats.total_bytes += total_bytes;
+                            if self.config.sticky_redirect {
+                                event!(Level::DEBUG, "URL for subsequent requests: {final_url}");
+                                url = final_url;
+                            }
                         }
                         Err(e) => {
+                            event!(Level::WARN, "Request failed: {e}");
                             stats.error = Some(format!("Request failed: {e}"));
                             return stats;
                         }
@@ -176,21 +177,12 @@ impl PatternDriver {
     async fn run(&self, transport: &Transport, url: &str) -> ClientStats {
         let mut stats = ClientStats::new(url);
 
-        let HeadResult {
-            content_length,
-            final_url,
-        } = match transport.head_url(url).await {
+        let HeadResult { content_length } = match transport.head_url(url).await {
             Ok(length) => length,
             Err(e) => {
                 stats.error = Some(format!("Failed to get content length: {e}"));
                 return stats;
             }
-        };
-        let url = if self.config.sticky_redirect {
-            event!(Level::DEBUG, "Using URL for range requests: {final_url}");
-            final_url.as_str()
-        } else {
-            url
         };
 
         let request_length = self.config.request_size.get().min(content_length.get());
@@ -202,18 +194,30 @@ impl PatternDriver {
         };
         let mut rng = ChaCha8Rng::from_seed(seed);
 
+        // Start with the original URL, but if sticky_redirect is enabled, we
+        // will update it to the final URL after the first request.
+        let mut url = url.to_owned();
+
         for _ in 0..self.config.num_requests {
             let start = rng.random_range(0..=max_start);
             let end = start + request_length - 1;
             let range_header = format!("bytes={start}-{end}");
             let request_start = Instant::now();
-            let request_bytes = transport.range_request(url, range_header).await;
+            let request_bytes = transport.range_request(&url, range_header).await;
             match request_bytes {
-                Ok(bytes) => {
-                    stats.total_bytes += bytes;
+                Ok(RangeResult {
+                    total_bytes,
+                    final_url,
+                }) => {
+                    stats.total_bytes += total_bytes;
+                    if self.config.sticky_redirect {
+                        event!(Level::DEBUG, "URL for subsequent requests: {final_url}");
+                        url = final_url;
+                    }
                 }
                 Err(e) => {
                     stats.error = Some(format!("Request failed: {e}"));
+                    event!(Level::WARN, "Request failed: {e}");
                     return stats;
                 }
             }

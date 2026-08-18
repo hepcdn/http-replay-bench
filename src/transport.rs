@@ -88,6 +88,11 @@ pub struct Transport {
 #[derive(Debug)]
 pub struct HeadResult {
     pub content_length: NonZeroUsize,
+}
+
+#[derive(Debug)]
+pub struct RangeResult {
+    pub total_bytes: usize,
     pub final_url: String,
 }
 
@@ -112,7 +117,8 @@ impl Transport {
         let builder = reqwest_middleware::ClientBuilder::new(builder.build()?);
 
         let retry_policy = ExponentialBackoff::builder().build_with_max_retries(config.max_retries);
-        let retries = RetryTransientMiddleware::new_with_policy(retry_policy);
+        let retries = RetryTransientMiddleware::new_with_policy(retry_policy)
+            .with_retry_log_level(Level::DEBUG);
         let builder = builder.with(retries);
 
         let authorization = WLCGTokenAuthMiddleware::try_new();
@@ -149,10 +155,7 @@ impl Transport {
             .and_then(|s| s.parse::<NonZeroUsize>().ok())
             .ok_or(TransportError::InvalidContentLength)?;
 
-        Ok(HeadResult {
-            content_length,
-            final_url: head_response.url().to_string(),
-        })
+        Ok(HeadResult { content_length })
     }
 
     /// Make a range request to the given URL and return the total number of bytes received.
@@ -162,7 +165,7 @@ impl Transport {
         &self,
         url: &str,
         range_header: String,
-    ) -> Result<usize, TransportError> {
+    ) -> Result<RangeResult, TransportError> {
         event!(
             Level::DEBUG,
             "Sending range request to {url} with header: {range_header}"
@@ -212,6 +215,9 @@ impl Transport {
             total_bytes += data.len();
         }
 
-        Ok(total_bytes)
+        Ok(RangeResult {
+            total_bytes,
+            final_url: response.url().to_string(),
+        })
     }
 }
