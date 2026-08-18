@@ -31,12 +31,20 @@ pub struct URLPoolConfig {
     /// Limit the number of paths to read from the path file.
     #[arg(long)]
     limit: Option<usize>,
+
+    /// Wall time to repeat the URL pool, in seconds.
+    ///
+    /// If set, the URL pool will repeat until the wall time has elapsed, rather
+    /// than stopping when all paths have been used.
+    #[arg(long)]
+    wall_time: Option<u64>,
 }
 
 #[derive(Clone, Debug)]
 pub struct URLPool {
     paths: Arc<Vec<String>>,
     index: Arc<atomic::AtomicUsize>,
+    wall_end: Option<std::time::Instant>,
 }
 
 impl URLPool {
@@ -68,12 +76,21 @@ impl URLPool {
         Ok(Self {
             paths: Arc::new(paths),
             index: Arc::new(atomic::AtomicUsize::new(0)),
+            wall_end: config
+                .wall_time
+                .map(|seconds| std::time::Instant::now() + std::time::Duration::from_secs(seconds)),
         })
     }
 
     pub fn next_path(&self) -> Option<String> {
         let idx = self.index.fetch_add(1, atomic::Ordering::Relaxed);
-        if idx < self.paths.len() {
+        if let Some(wall_end) = self.wall_end {
+            if std::time::Instant::now() < wall_end {
+                Some(self.paths[idx % self.paths.len()].clone())
+            } else {
+                None
+            }
+        } else if idx < self.paths.len() {
             Some(self.paths[idx].clone())
         } else {
             None
