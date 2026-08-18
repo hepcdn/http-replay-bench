@@ -161,24 +161,30 @@ impl Hud {
             "{spinner} [{elapsed_precise}] active clients: {active}  finished: {finished} ({rate})",
         )
         .expect("HUD template is valid")
-        .with_key("active", move |_: &ProgressState, w: &mut dyn fmt::Write| {
-            let _ = write!(w, "{:>6}", active.active());
-        })
+        .with_key(
+            "active",
+            move |_: &ProgressState, w: &mut dyn fmt::Write| {
+                let _ = write!(w, "{:>6}", active.active());
+            },
+        )
         .with_key(
             "finished",
             move |_: &ProgressState, w: &mut dyn fmt::Write| {
                 let _ = write!(w, "{:>7}", finished.finished());
             },
         )
-        .with_key("rate", move |state: &ProgressState, w: &mut dyn fmt::Write| {
-            let secs = state.elapsed().as_secs_f64();
-            let per_sec = if secs > 0.0 {
-                rate.finished() as f64 / secs
-            } else {
-                0.0
-            };
-            let _ = write!(w, "{per_sec:>7.1}/s");
-        })
+        .with_key(
+            "rate",
+            move |state: &ProgressState, w: &mut dyn fmt::Write| {
+                let secs = state.elapsed().as_secs_f64();
+                let per_sec = if secs > 0.0 {
+                    rate.finished() as f64 / secs
+                } else {
+                    0.0
+                };
+                let _ = write!(w, "{per_sec:>7.1}/s");
+            },
+        )
     }
 
     /// The counting layer, or `None` when the HUD is disabled.

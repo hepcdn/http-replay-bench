@@ -12,7 +12,10 @@ use serde_with::{DurationSecondsWithFrac, TimestampSecondsWithFrac, serde_as};
 use sha2::{Digest, Sha256};
 use tracing::{Level, event};
 
-use crate::{trace, transport::Transport};
+use crate::{
+    trace,
+    transport::{HeadResult, Transport},
+};
 
 #[serde_as]
 #[derive(Clone, Debug, Serialize)]
@@ -59,6 +62,13 @@ pub struct ReplayConfig {
     /// Scale factor for wait time between requests.
     #[arg(long, default_value_t = 1.0)]
     wait_scale: f64,
+
+    /// Remember the redirected URL from the HEAD request and use it for all subsequent requests.
+    ///
+    /// TODO: this is more appropriately a transport-level option, but we need
+    /// to refactor Transport to have sessions.
+    #[arg(long)]
+    sticky_redirect: bool,
 }
 
 #[derive(Clone, Debug)]
@@ -80,7 +90,10 @@ impl ReplayDriver {
     async fn run(&self, transport: &Transport, url: &str) -> ClientStats {
         let mut stats = ClientStats::new(url);
 
-        let content_length = match transport.head_url(url).await {
+        let HeadResult {
+            content_length,
+            final_url,
+        } = match transport.head_url(url).await {
             Ok(length) => length,
             Err(e) => {
                 stats.error = Some(format!("Failed to get content length: {e}"));
@@ -88,6 +101,12 @@ impl ReplayDriver {
             }
         };
         event!(Level::DEBUG, "Content length for {url}: {content_length}");
+        let url = if self.config.sticky_redirect {
+            event!(Level::DEBUG, "Using URL for range requests: {final_url}");
+            final_url.as_str()
+        } else {
+            url
+        };
 
         for action in self.trace.actions() {
             match action {
@@ -138,6 +157,10 @@ pub struct PatternConfig {
     /// Deterministically seed the sequence of random ranges by the URL
     #[arg(long, default_value_t = false)]
     deterministic: bool,
+
+    /// Remember the redirected URL from the HEAD request and use it for all subsequent requests.
+    #[arg(long)]
+    sticky_redirect: bool,
 }
 
 #[derive(Clone, Debug)]
@@ -153,12 +176,21 @@ impl PatternDriver {
     async fn run(&self, transport: &Transport, url: &str) -> ClientStats {
         let mut stats = ClientStats::new(url);
 
-        let content_length = match transport.head_url(url).await {
+        let HeadResult {
+            content_length,
+            final_url,
+        } = match transport.head_url(url).await {
             Ok(length) => length,
             Err(e) => {
                 stats.error = Some(format!("Failed to get content length: {e}"));
                 return stats;
             }
+        };
+        let url = if self.config.sticky_redirect {
+            event!(Level::DEBUG, "Using URL for range requests: {final_url}");
+            final_url.as_str()
+        } else {
+            url
         };
 
         let request_length = self.config.request_size.get().min(content_length.get());

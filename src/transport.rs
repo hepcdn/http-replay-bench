@@ -85,6 +85,12 @@ pub struct Transport {
     internal_client: reqwest_middleware::ClientWithMiddleware,
 }
 
+#[derive(Debug)]
+pub struct HeadResult {
+    pub content_length: NonZeroUsize,
+    pub final_url: String,
+}
+
 impl Transport {
     /// Set up the client configuration based on the provided arguments.
     pub fn try_build(config: &TransportConfig) -> anyhow::Result<Self> {
@@ -122,7 +128,7 @@ impl Transport {
     }
 
     /// Get the content length of the resource at the given URL by sending a HEAD request.
-    pub async fn head_url(&self, url: &str) -> Result<NonZeroUsize, TransportError> {
+    pub async fn head_url(&self, url: &str) -> Result<HeadResult, TransportError> {
         event!(Level::DEBUG, "Sending HEAD request to {url}");
         let head_response = self
             .internal_client
@@ -136,12 +142,17 @@ impl Transport {
                 head_response.status().into(),
             ));
         }
-        head_response
+        let content_length = head_response
             .headers()
             .get(reqwest::header::CONTENT_LENGTH)
             .and_then(|val| val.to_str().ok())
             .and_then(|s| s.parse::<NonZeroUsize>().ok())
-            .ok_or(TransportError::InvalidContentLength)
+            .ok_or(TransportError::InvalidContentLength)?;
+
+        Ok(HeadResult {
+            content_length,
+            final_url: head_response.url().to_string(),
+        })
     }
 
     /// Make a range request to the given URL and return the total number of bytes received.
@@ -152,7 +163,10 @@ impl Transport {
         url: &str,
         range_header: String,
     ) -> Result<usize, TransportError> {
-        event!(Level::DEBUG, "Sending range request to {url} with header: {range_header}");
+        event!(
+            Level::DEBUG,
+            "Sending range request to {url} with header: {range_header}"
+        );
         let mut response = self
             .internal_client
             .get(url)
