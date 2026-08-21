@@ -17,6 +17,44 @@ use crate::{
     transport::{HeadResult, RangeResult, Transport},
 };
 
+/// A builder for ClientStats, used to accumulate statistics during a client's execution.
+///
+/// Finalize the builder into a ClientStats instance by calling [`ClientStatsBuilder::finalize`].
+pub struct ClientStatsBuilder {
+    url: String,
+    start_time: SystemTime,
+    requests: usize,
+    total_bytes: usize,
+    seconds_reading: Duration,
+    seconds_sleeping: Duration,
+}
+
+impl ClientStatsBuilder {
+    pub fn new(url: &str) -> Self {
+        Self {
+            url: url.to_owned(),
+            start_time: SystemTime::now(),
+            requests: 0,
+            total_bytes: 0,
+            seconds_reading: Duration::ZERO,
+            seconds_sleeping: Duration::ZERO,
+        }
+    }
+
+    pub fn finalize(self, error: Option<String>) -> ClientStats {
+        ClientStats {
+            url: self.url,
+            start_time: self.start_time,
+            stop_time: SystemTime::now(),
+            requests: self.requests,
+            total_bytes: self.total_bytes,
+            seconds_reading: self.seconds_reading,
+            seconds_sleeping: self.seconds_sleeping,
+            error,
+        }
+    }
+}
+
 #[serde_as]
 #[derive(Clone, Debug, Serialize)]
 pub struct ClientStats {
@@ -37,21 +75,6 @@ pub struct ClientStats {
     seconds_sleeping: Duration,
     /// Last error encountered by the client, if any.
     error: Option<String>,
-}
-
-impl ClientStats {
-    fn new(url: &str) -> Self {
-        Self {
-            url: url.to_owned(),
-            start_time: SystemTime::now(),
-            stop_time: SystemTime::now(),
-            requests: 0,
-            total_bytes: 0,
-            seconds_reading: Duration::ZERO,
-            seconds_sleeping: Duration::ZERO,
-            error: None,
-        }
-    }
 }
 
 #[derive(Clone, Debug, Args, Serialize)]
@@ -88,13 +111,12 @@ impl ReplayDriver {
     }
 
     async fn run(&self, transport: &Transport, url: &str) -> ClientStats {
-        let mut stats = ClientStats::new(url);
+        let mut stats = ClientStatsBuilder::new(url);
 
         let HeadResult { content_length } = match transport.head_url(url).await {
             Ok(length) => length,
             Err(e) => {
-                stats.error = Some(format!("Failed to get content length: {e}"));
-                return stats;
+                return stats.finalize(Some(format!("Failed to get content length: {e}")));
             }
         };
         event!(Level::DEBUG, "Content length for {url}: {content_length}");
@@ -124,8 +146,7 @@ impl ReplayDriver {
                         }
                         Err(e) => {
                             event!(Level::WARN, "Request failed: {e}");
-                            stats.error = Some(format!("Request failed: {e}"));
-                            return stats;
+                            return stats.finalize(Some(format!("Request failed: {e}")));
                         }
                     }
                     stats.seconds_reading += request_start.elapsed();
@@ -140,8 +161,7 @@ impl ReplayDriver {
             }
         }
 
-        stats.stop_time = SystemTime::now();
-        stats
+        stats.finalize(None)
     }
 }
 
@@ -175,13 +195,12 @@ impl PatternDriver {
     }
 
     async fn run(&self, transport: &Transport, url: &str) -> ClientStats {
-        let mut stats = ClientStats::new(url);
+        let mut stats = ClientStatsBuilder::new(url);
 
         let HeadResult { content_length } = match transport.head_url(url).await {
             Ok(length) => length,
             Err(e) => {
-                stats.error = Some(format!("Failed to get content length: {e}"));
-                return stats;
+                return stats.finalize(Some(format!("Failed to get content length: {e}")));
             }
         };
 
@@ -216,17 +235,15 @@ impl PatternDriver {
                     }
                 }
                 Err(e) => {
-                    stats.error = Some(format!("Request failed: {e}"));
                     event!(Level::WARN, "Request failed: {e}");
-                    return stats;
+                    return stats.finalize(Some(format!("Request failed: {e}")));
                 }
             }
             stats.seconds_reading += request_start.elapsed();
             stats.requests += 1;
         }
 
-        stats.stop_time = SystemTime::now();
-        stats
+        stats.finalize(None)
     }
 }
 
