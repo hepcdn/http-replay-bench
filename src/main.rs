@@ -1,16 +1,9 @@
-use std::{
-    fs::File,
-    io::IsTerminal,
-    iter,
-    path::PathBuf,
-    thread,
-    time::{Duration, Instant},
-};
+use std::{fs::File, io::IsTerminal, iter, path::PathBuf, thread, time::SystemTime};
 
 use ::futures::{StreamExt, stream};
 use clap::Parser;
 use serde::Serialize;
-use serde_with::{DurationSecondsWithFrac, serde_as};
+use serde_with::{TimestampSecondsWithFrac, serde_as};
 use tracing::{Level, event};
 use tracing_subscriber::{
     Layer, filter::LevelFilter, fmt::format::FmtSpan, layer::SubscriberExt, util::SubscriberInitExt,
@@ -26,7 +19,6 @@ mod hud;
 mod trace;
 mod transport;
 mod url;
-mod wlcg_token_discovery;
 
 /// A load generator for benchmarking distributed storage via http protocol.
 ///
@@ -124,9 +116,10 @@ impl Worker {
 #[derive(Clone, Debug, Serialize)]
 struct RunStats {
     args: Args,
-    /// Total wall time taken for the run.
-    #[serde_as(as = "DurationSecondsWithFrac<f64>")]
-    wall_time: Duration,
+    #[serde_as(as = "TimestampSecondsWithFrac<f64>")]
+    start_time: SystemTime,
+    #[serde_as(as = "TimestampSecondsWithFrac<f64>")]
+    stop_time: SystemTime,
     client_stats: Vec<driver::ClientStats>,
 }
 
@@ -137,9 +130,8 @@ fn run(args: &Args) -> anyhow::Result<()> {
     // Create before starting, so we can fail fast if the file can't be created.
     let output_file = File::create(&args.output_file)?;
 
-    let run_start = Instant::now();
-    let run_span = tracing::span!(Level::INFO, "run");
-    let _run_enter = run_span.enter();
+    let run_start = SystemTime::now();
+    let _run_span = tracing::span!(Level::INFO, "run").entered();
 
     let stats = thread::scope(move |s| -> anyhow::Result<_> {
         let threads = (0..args.num_workers)
@@ -159,11 +151,10 @@ fn run(args: &Args) -> anyhow::Result<()> {
         Ok(all_stats)
     })?;
 
-    let run_duration = run_start.elapsed();
-
     let run_stats = RunStats {
         args: args.clone(),
-        wall_time: run_duration,
+        start_time: run_start,
+        stop_time: SystemTime::now(),
         client_stats: stats,
     };
 

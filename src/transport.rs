@@ -7,7 +7,7 @@
 //! the transport layer.
 use std::{num::NonZeroUsize, time::Duration};
 
-use crate::wlcg_token_discovery::WLCGTokenAuthMiddleware;
+use wlcg_token::reqwest::WLCGTokenAuthMiddleware;
 use clap::{Args, ValueEnum};
 use reqwest_retry::{RetryTransientMiddleware, policies::ExponentialBackoff};
 use serde::Serialize;
