@@ -7,11 +7,11 @@
 //! the transport layer.
 use std::{num::NonZeroUsize, time::Duration};
 
-use wlcg_token::reqwest::WLCGTokenAuthMiddleware;
 use clap::{Args, ValueEnum};
 use reqwest_retry::{RetryTransientMiddleware, policies::ExponentialBackoff};
 use serde::Serialize;
 use tracing::{Level, event};
+use wlcg_token::reqwest::WLCGTokenAuthMiddleware;
 
 #[derive(Clone, Debug, Args, Serialize)]
 pub struct TransportConfig {
@@ -20,8 +20,26 @@ pub struct TransportConfig {
     http_version: HttpVersion,
 
     /// Timeout for requests, in seconds.
-    #[arg(long, default_value_t = 5)]
+    ///
+    /// This is the total timeout for the request, including connection time,
+    /// redirects, and reading the response body. If the request takes longer
+    /// than this timeout, it will be aborted.
+    #[arg(long, default_value_t = 60)]
     timeout: u64,
+
+    /// Pool idle timeout for connections, in seconds.
+    /// 
+    /// Set an optional timeout for idle sockets being kept-alive.
+    #[arg(long, default_value_t = 90)]
+    pool_idle_timeout: u64,
+
+    /// Read timeout for requests, in seconds.
+    ///
+    /// The timeout applies to each read operation, and resets after a
+    /// successful read. This is more appropriate for detecting stalled
+    /// connections when the size isn't known beforehand.
+    #[arg(long, default_value_t = 60)]
+    read_timeout: u64,
 
     /// Don't follow redirects when making requests.
     #[arg(long)]
@@ -100,8 +118,9 @@ impl Transport {
     /// Set up the client configuration based on the provided arguments.
     pub fn try_build(config: &TransportConfig) -> anyhow::Result<Self> {
         let builder = reqwest::ClientBuilder::new()
-            .pool_idle_timeout(Some(Duration::from_secs(config.timeout)))
+            .pool_idle_timeout(Some(Duration::from_secs(config.pool_idle_timeout)))
             .timeout(Duration::from_secs(config.timeout))
+            .read_timeout(Duration::from_secs(config.read_timeout))
             .tcp_nodelay(true);
         let builder = if config.no_follow_redirects {
             builder.redirect(reqwest::redirect::Policy::none())
@@ -141,7 +160,7 @@ impl Transport {
             .head(url)
             .send()
             .await
-            .map_err(|e| TransportError::RequestError(e.to_string()))?;
+            .map_err(|e| TransportError::RequestError(format!("{:?}", e)))?;
 
         if head_response.status() != reqwest::StatusCode::OK {
             return Err(TransportError::UnexpectedStatus(
@@ -176,7 +195,7 @@ impl Transport {
             .header(reqwest::header::RANGE, range_header.as_str())
             .send()
             .await
-            .map_err(|e| TransportError::RequestError(e.to_string()))?;
+            .map_err(|e| TransportError::RequestError(format!("{:?}", e)))?;
 
         // Always expect a 206 Partial Content response for range requests; otherwise, count as an error
         if response.status() != reqwest::StatusCode::PARTIAL_CONTENT {
@@ -211,7 +230,7 @@ impl Transport {
 
         let mut total_bytes = 0;
         while let Some(chunk) = response.chunk().await.transpose() {
-            let data = chunk.map_err(|e| TransportError::BodyReadError(e.to_string()))?;
+            let data = chunk.map_err(|e| TransportError::BodyReadError(format!("{:?}", e)))?;
             total_bytes += data.len();
         }
 
