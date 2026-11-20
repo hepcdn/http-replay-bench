@@ -175,6 +175,10 @@ pub struct PatternConfig {
     #[arg(short, long)]
     request_size: NonZeroUsize,
 
+    /// Align request start positions to this byte boundary.
+    #[arg(long, default_value_t = NonZeroUsize::new(1).unwrap())]
+    request_alignment: NonZeroUsize,
+
     /// Deterministically seed the sequence of random ranges by the URL
     #[arg(long, default_value_t = false)]
     deterministic: bool,
@@ -219,6 +223,7 @@ impl PatternDriver {
 
         for _ in 0..self.config.num_requests {
             let start = rng.random_range(0..=max_start);
+            let start = (start / self.config.request_alignment) * self.config.request_alignment.get();
             let end = start + request_length - 1;
             let range_header = format!("bytes={start}-{end}");
             let request_start = Instant::now();
